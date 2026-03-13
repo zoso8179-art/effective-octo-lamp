@@ -202,7 +202,7 @@ async function run() {
       process.exit(1);
     }
 
-    const dueTomorrow = collections.filter(c => c.date === tomorrowText);
+    const dueTomorrow = collections.slice(0, 1);
 
     if (!dueTomorrow.length) {
       console.log("No reminder needed today.");

@@ -69,9 +69,19 @@ if (selectCount > 0) {
       await select.selectOption({ label: match });
 
       // submit the form after selecting the property
-      const submitButton = page.locator('button, input[type="submit"]').first();
-      await submitButton.click();
-      await page.waitForLoadState("networkidle");
+if (match) {
+  console.log("Selecting matching property:", match);
+  await select.selectOption({ label: match });
+
+  // submit the form after selecting the property
+  await select.evaluate((el) => {
+    const form = el.closest("form");
+    if (form) form.submit();
+  });
+
+  await page.waitForLoadState("networkidle");
+  break;
+}
 
       break;
     }

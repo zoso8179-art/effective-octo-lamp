@@ -36,74 +36,67 @@ function binLabelAndEmoji(binType) {
   const t = (binType || "").toLowerCase();
 
   if (t.includes("recycl")) {
-    return { label: "Recycling", emoji: "🟩" };
+    return { label: "Recycling", emoji: "🟦" };
   }
   if (t.includes("garden")) {
     return { label: "Garden waste", emoji: "🟫" };
   }
   if (t.includes("food")) {
-    return { label: "Food waste", emoji: "🟧" };
+    return { label: "Food waste", emoji: "🟩" };
   }
-  if (t.includes("general") || t.includes("refuse") || t.includes("black")) {
+  if (t.includes("general") || t.includes("black")) {
     return { label: "General waste", emoji: "⬛" };
   }
 
   return { label: "Bin collection", emoji: "🗑️" };
 }
 
+function classifyBinType(text) {
+  const t = (text || "").toLowerCase();
+
+  if (t.includes("general waste") || t.includes("black bin")) {
+    return "general waste";
+  }
+  if (t.includes("recycling") || t.includes("blue bin")) {
+    return "recycling";
+  }
+  if (t.includes("garden") || t.includes("brown bin")) {
+    return "garden waste";
+  }
+  if (t.includes("food waste")) {
+    return "food waste";
+  }
+
+  return "unknown";
+}
+
 function extractBinCollections(bodyText) {
   const text = normaliseText(bodyText);
 
-  // Split into lines so we can inspect nearby text around dates
-  const lines = text
-    .split("\n")
-    .map(line => line.trim())
-    .filter(Boolean);
+  // Derby seems to return the schedule as one long line sometimes,
+  // so match each full "weekday, date: bin type" pattern directly.
+  const pattern =
+    /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday),\s+(\d{1,2}\s+[a-z]+\s+\d{4})\s*:\s*([^\\n]+?bin collection)/gi;
 
   const results = [];
+  let match;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const dateMatches = line.match(/\b\d{1,2}\s+[a-z]+\s+\d{4}\b/g);
+  while ((match = pattern.exec(text)) !== null) {
+    const date = match[1].toLowerCase().trim();
+    const description = match[2].toLowerCase().trim();
+    const binType = classifyBinType(description);
 
-    if (!dateMatches) continue;
-
-    // Look at nearby context to infer bin type
-    const context = [
-      lines[i - 3] || "",
-      lines[i - 2] || "",
-      lines[i - 1] || "",
-      lines[i] || "",
-      lines[i + 1] || "",
-      lines[i + 2] || "",
-      lines[i + 3] || ""
-    ].join(" ");
-
-    let binType = "unknown";
-
-    if (context.match(/recycl/i)) {
-      binType = "recycling";
-    } else if (context.match(/garden/i)) {
-      binType = "garden waste";
-    } else if (context.match(/food/i)) {
-      binType = "food waste";
-    } else if (context.match(/general|refuse|black bin|grey bin|household waste/i)) {
-      binType = "general waste";
-    }
-
-    for (const date of dateMatches) {
-      results.push({
-        binType,
-        date: date.toLowerCase(),
-        context
-      });
-    }
+    results.push({
+      date,
+      binType,
+      description
+    });
   }
 
-  // Deduplicate by bin type + date
+  // Deduplicate exact duplicates
   const seen = new Set();
   return results.filter(item => {
-    const key = `${item.binType}__${item.date}`;
+    const key = `${item.date}__${item.binType}__${item.description}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -162,13 +155,13 @@ async function lookupBinCollections() {
       const select = selects.nth(i);
       const options = await select.locator("option").allTextContents();
 
-      const match = options.find(opt =>
+      const selectedMatch = options.find(opt =>
         opt.toLowerCase().includes(ADDRESS_QUERY)
       );
 
-      if (match) {
+      if (selectedMatch) {
         matched = true;
-        await select.selectOption({ label: match });
+        await select.selectOption({ label: selectedMatch });
 
         await Promise.all([
           page.waitForLoadState("domcontentloaded").catch(() => {}),
@@ -212,16 +205,20 @@ async function run() {
 
     console.log("Collections found:", collections);
 
-    const dueTomorrow = collections.find(c => c.date === tomorrowText);
+    const dueTomorrow = collections.filter(c => c.date === tomorrowText);
 
-    if (!dueTomorrow) {
+    if (!dueTomorrow.length) {
       console.log("No reminder needed today.");
       process.exit(0);
     }
 
-    const { label, emoji } = binLabelAndEmoji(dueTomorrow.binType);
+    // If multiple bins are due tomorrow, list them all
+    const messageLines = dueTomorrow.map(item => {
+      const { label, emoji } = binLabelAndEmoji(item.binType);
+      return `${emoji} ${label}`;
+    });
 
-    const message = `${emoji} ${label} tomorrow\nPut it out tonight.`;
+    const message = `${messageLines.join("\n")}\nTomorrow\nPut it out tonight.`;
 
     await sendReminder(message);
     console.log("Reminder sent:", message);

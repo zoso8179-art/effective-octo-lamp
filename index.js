@@ -65,8 +65,12 @@ async function lookupBinDay() {
         );
 
         if (match) {
-          console.log("Selecting matching property:", match);
-          await select.selectOption({ label: match }).catch(async () => {
+     console.log("Selecting matching property:", match);
+await select.selectOption({ label: match });
+
+// submit the form
+await page.locator("button, input[type=submit]").first().click();
+await page.waitForLoadState("networkidle");
             const optionLocator = select.locator("option");
             const count = await optionLocator.count();
             for (let j = 0; j < count; j++) {

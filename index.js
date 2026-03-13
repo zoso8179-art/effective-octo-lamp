@@ -10,7 +10,107 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-async function lookupBinDay() {
+function normaliseText(text) {
+  return (text || "")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n+/g, "\n")
+    .trim()
+    .toLowerCase();
+}
+
+function getTomorrowText() {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  return tomorrow
+    .toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "long",
+      year: "numeric"
+    })
+    .toLowerCase();
+}
+
+function binLabelAndEmoji(binType) {
+  const t = (binType || "").toLowerCase();
+
+  if (t.includes("recycl")) {
+    return { label: "Recycling", emoji: "🟩" };
+  }
+  if (t.includes("garden")) {
+    return { label: "Garden waste", emoji: "🟫" };
+  }
+  if (t.includes("food")) {
+    return { label: "Food waste", emoji: "🟧" };
+  }
+  if (t.includes("general") || t.includes("refuse") || t.includes("black")) {
+    return { label: "General waste", emoji: "⬛" };
+  }
+
+  return { label: "Bin collection", emoji: "🗑️" };
+}
+
+function extractBinCollections(bodyText) {
+  const text = normaliseText(bodyText);
+
+  // Split into lines so we can inspect nearby text around dates
+  const lines = text
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const results = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const dateMatches = line.match(/\b\d{1,2}\s+[a-z]+\s+\d{4}\b/g);
+
+    if (!dateMatches) continue;
+
+    // Look at nearby context to infer bin type
+    const context = [
+      lines[i - 3] || "",
+      lines[i - 2] || "",
+      lines[i - 1] || "",
+      lines[i] || "",
+      lines[i + 1] || "",
+      lines[i + 2] || "",
+      lines[i + 3] || ""
+    ].join(" ");
+
+    let binType = "unknown";
+
+    if (context.match(/recycl/i)) {
+      binType = "recycling";
+    } else if (context.match(/garden/i)) {
+      binType = "garden waste";
+    } else if (context.match(/food/i)) {
+      binType = "food waste";
+    } else if (context.match(/general|refuse|black bin|grey bin|household waste/i)) {
+      binType = "general waste";
+    }
+
+    for (const date of dateMatches) {
+      results.push({
+        binType,
+        date: date.toLowerCase(),
+        context
+      });
+    }
+  }
+
+  // Deduplicate by bin type + date
+  const seen = new Set();
+  return results.filter(item => {
+    const key = `${item.binType}__${item.date}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function lookupBinCollections() {
   const browser = await chromium.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"]
@@ -24,7 +124,6 @@ async function lookupBinDay() {
       timeout: 60000
     });
 
-    // Accept cookies if shown
     const cookieBtn = page.locator("#allow-all-cookies");
     if (await cookieBtn.count()) {
       try {
@@ -35,7 +134,6 @@ async function lookupBinDay() {
       } catch {}
     }
 
-    // Enter postcode
     const postcodeInput = page.locator('input[type="text"], input').first();
     await postcodeInput.fill(POSTCODE);
 
@@ -56,7 +154,9 @@ async function lookupBinDay() {
     const selects = page.locator("select");
     const selectCount = await selects.count();
 
-    if (selectCount === 0) return null;
+    if (selectCount === 0) return [];
+
+    let matched = false;
 
     for (let i = 0; i < selectCount; i++) {
       const select = selects.nth(i);
@@ -67,6 +167,7 @@ async function lookupBinDay() {
       );
 
       if (match) {
+        matched = true;
         await select.selectOption({ label: match });
 
         await Promise.all([
@@ -82,12 +183,10 @@ async function lookupBinDay() {
       }
     }
 
-    const bodyText = ((await page.textContent("body")) || "").toLowerCase();
+    if (!matched) return [];
 
-    const matches = bodyText.match(/\b\d{1,2}\s+[a-z]+\s+\d{4}\b/g);
-    if (!matches || matches.length === 0) return null;
-
-    return matches[0];
+    const bodyText = (await page.textContent("body")) || "";
+    return extractBinCollections(bodyText);
   } finally {
     await browser.close();
   }
@@ -103,32 +202,29 @@ async function sendReminder(message) {
 
 async function run() {
   try {
-    const nextDate = await lookupBinDay();
+    const tomorrowText = getTomorrowText();
+    const collections = await lookupBinCollections();
 
-    if (!nextDate) {
-      console.log("Could not determine bin date.");
+    if (!collections.length) {
+      console.log("Could not determine bin collections.");
       process.exit(1);
     }
 
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    console.log("Collections found:", collections);
 
-    const tomorrowText = tomorrow
-      .toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "long",
-        year: "numeric"
-      })
-      .toLowerCase();
+    const dueTomorrow = collections.find(c => c.date === tomorrowText);
 
-    if (true) {
-      await sendReminder(
-        "Reminder: your bin collection is tomorrow. Put your bins out tonight."
-      );
-      console.log("Reminder sent.");
-    } else {
+    if (!dueTomorrow) {
       console.log("No reminder needed today.");
+      process.exit(0);
     }
+
+    const { label, emoji } = binLabelAndEmoji(dueTomorrow.binType);
+
+    const message = `${emoji} ${label} tomorrow\nPut it out tonight.`;
+
+    await sendReminder(message);
+    console.log("Reminder sent:", message);
 
     process.exit(0);
   } catch (err) {

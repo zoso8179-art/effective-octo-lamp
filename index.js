@@ -1,6 +1,7 @@
 require("dotenv").config();
 const { chromium } = require("playwright");
 const twilio = require("twilio");
+const fs = require("fs");
 
 console.log("DEBUG VERSION LIVE - PARKFIELDS V4");
 
@@ -213,18 +214,27 @@ async function run() {
       const { label, emoji } = binLabelAndEmoji(item.binType);
       return `${emoji} ${label}`;
     });
+const message =
+  `🗑️ Derby Bin Reminder\n\n` +
+  `${messageLines.join("\n")}\n\n` +
+  `Collection: ${tomorrowText}\n` +
+  `Put it out tonight.`;
 
-    const message =
-      `🗑️ Derby Bin Reminder\n\n` +
-      `${messageLines.join("\n")}\n\n` +
-      `Collection: ${tomorrowText}\n` +
-      `Put it out tonight.`;
 
-    await sendReminder(message);
-    console.log("Reminder sent.");
+const markerFile = "/tmp/lastReminder.txt";
+
+if (fs.existsSync(markerFile)) {
+  const last = fs.readFileSync(markerFile, "utf8");
+
+  if (last === tomorrowText) {
+    console.log("Reminder already sent today.");
     process.exit(0);
-  } catch (err) {
-    console.error("Run failed:", err.message);
-    process.exit(1);
   }
 }
+
+
+await sendReminder(message);
+
+fs.writeFileSync("/tmp/lastReminder.txt", tomorrowText);
+
+console.log("Reminder sent.");

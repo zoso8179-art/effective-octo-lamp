@@ -11,4 +11,7 @@ join path-avoid
 3. Then send
 JOIN
 
-The bot will ask for your postcode and address and will set up a reminder the evening before bin day.
+4. When asked, send your postcode and house number in one message
+
+Example:
+DE22 1HH 14

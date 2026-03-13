@@ -1,13 +1,27 @@
-# Derby Bin Bot
+# Derby Bin Bot v5
 
-A conversational WhatsApp bin reminder bot for Derby.
+WhatsApp bin reminder bot for Derby with low-friction onboarding.
 
-## Current live settings for your account
+## Onboarding model
 
-Twilio WhatsApp sandbox number:
+User sends:
+JOIN
+
+Bot asks for:
+postcode + house number
+
+Example:
+DE22 1HH 14
+
+If one address match is found, the bot confirms and subscribes the user.
+If multiple matches are found, the bot returns a numbered list and asks the user to reply with the number.
+
+## Current live setup
+
+Twilio sandbox number:
 +1 415 523 8886
 
-Sandbox join phrase for this account:
+Twilio sandbox join phrase for this account:
 join path-avoid
 
 Railway public domain:
@@ -22,6 +36,6 @@ https://effective-octo-lamp-production.up.railway.app/health
 ## Notes
 
 - The sandbox join phrase is account-specific.
-- Reminder copy says 18:00.
-- Set your scheduled trigger to call:
-  /run-reminders?key=YOUR_RUN_KEY
+- Reminder time is 18:00.
+- Use a persistent volume mounted at /data.
+- Trigger reminders via /run-reminders?key=YOUR_RUN_KEY

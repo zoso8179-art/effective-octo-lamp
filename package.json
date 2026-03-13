@@ -1,7 +1,7 @@
 {
   "name": "derby-bin-bot",
-  "version": "4.0.0",
-  "description": "Conversational WhatsApp Derby bin reminder bot",
+  "version": "5.0.0",
+  "description": "Conversational WhatsApp Derby bin reminder bot with postcode + house number onboarding",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

@@ -1,7 +1,7 @@
 {
-  "name": "derby-neighborhood-bot",
-  "version": "2.0.0",
-  "description": "WhatsApp Derby bin reminder bot for individuals and neighbours",
+  "name": "bin-reminder-whatsapp",
+  "version": "3.0.0",
+  "description": "Conversational WhatsApp bin reminder bot for Derby",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

@@ -1,18 +1,42 @@
-# Derby Neighborhood Bot
+# Bin Reminder - WhatsApp Conversational Bot
 
-A more complete WhatsApp neighborhood bot for Derby bin reminders.
+A Derby bin reminder service that works through WhatsApp.
 
-## Features
+## What it does
 
-- Derby City Council lookup
-- Night-before WhatsApp reminders
-- Multiple users and addresses
-- Commands: HELP, JOIN, ADD, LIST, NEXT, SCHEDULE, PAUSE, START, REMOVE, TESTSEND
-- Duplicate-send protection
-- JSON state store
+- User sends `JOIN`
+- Bot asks for postcode
+- Bot asks for address
+- Bot stores the user
+- User receives a WhatsApp reminder at 18:00 the night before collection
 
-## Railway
+## Commands
 
-- Use this as an exposed web service
-- Mount a persistent volume at /data
-- Point Twilio sandbox webhook to /whatsapp
+- `JOIN`
+- `NEXT`
+- `STOP`
+- `START`
+- `HELP`
+
+## Deployment
+
+Deploy to Railway using the Dockerfile.
+
+## Required environment variables
+
+- `APP_NAME`
+- `PORT`
+- `TIMEZONE`
+- `DATA_DIR`
+- `RUN_KEY`
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_FROM`
+
+## Railway notes
+
+- Expose the service publicly
+- Mount a persistent volume to `/data`
+- Twilio WhatsApp webhook should point to `/whatsapp`
+- Use a scheduled trigger for `/run-reminders?key=YOUR_RUN_KEY`
+- Reminder time should be 18:00 Europe/London

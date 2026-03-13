@@ -197,8 +197,6 @@ async function run() {
     const tomorrowText = getTomorrowText();
     const collections = await lookupBinCollections();
 
-    console.log("Collections found:", collections);
-
     if (!collections.length) {
       console.log("Could not determine bin collections.");
       process.exit(1);
@@ -216,17 +214,18 @@ async function run() {
       return `${emoji} ${label}`;
     });
 
-    const message = `${messageLines.join("\n")}\nTomorrow\nPut it out tonight.`;
+    const message =
+      `🗑️ Derby Bin Reminder\n\n` +
+      `${messageLines.join("\n")}\n\n` +
+      `Tomorrow\n` +
+      `Put it out tonight.`;
 
     await sendReminder(message);
-    console.log("Reminder sent:", message);
-
+    console.log("Reminder sent.");
     process.exit(0);
   } catch (err) {
     console.error("Run failed:", err.message);
-    console.error(err);
     process.exit(1);
   }
 }
-
 run();

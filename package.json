@@ -1,13 +1,16 @@
 {
-  "name": "bin-reminder",
-  "version": "1.0.0",
+  "name": "derby-neighborhood-bot",
+  "version": "2.0.0",
+  "description": "WhatsApp Derby bin reminder bot for individuals and neighbours",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "dotenv": "^16.4.0",
-    "playwright": "^1.52.0",
-    "twilio": "^4.22.0"
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "playwright": "1.58.2",
+    "twilio": "^5.4.0"
   }
 }

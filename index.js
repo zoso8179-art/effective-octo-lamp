@@ -25,43 +25,102 @@ async function lookupBinDay() {
       timeout: 60000
     });
 
-    // Accept cookies if present
-    const allowCookies = page.getByText("Allow all cookies", { exact: true });
-    if (await allowCookies.isVisible().catch(() => false)) {
-      await allowCookies.click().catch(() => {});
+    // Accept cookies if shown
+    const cookieButton = page.getByText("Allow all cookies", { exact: true });
+    if (await cookieButton.isVisible().catch(() => false)) {
+      await cookieButton.click().catch(() => {});
     }
 
     // Fill postcode
-    const postcodeInput = page.locator('input').first();
+    const postcodeInput = page.locator("input").first();
     await postcodeInput.fill(POSTCODE);
 
-    // Click Find Property
+    // Submit postcode lookup
     await page.getByText("Find Property", { exact: true }).click();
-
-    // Wait for address options to appear
     await page.waitForLoadState("networkidle");
 
-    // Try to select the address containing ADDRESS_QUERY
-    const pageText = (await page.textContent("body")) || "";
     console.log("Loaded property/results page");
 
-    const matchingOption = page.locator(`text=${ADDRESS_QUERY}`);
-    const count = await matchingOption.count().catch(() => 0);
+    // Debug dump of page text
+    const bodyText1 = (await page.textContent("body")) || "";
+    console.log("Page snippet after postcode search:");
+    console.log(bodyText1.slice(0, 1000));
 
-    if (count > 0) {
-      await matchingOption.first().click().catch(() => {});
-      await page.waitForLoadState("networkidle");
+    // Try dropdown first
+    const selects = page.locator("select");
+    const selectCount = await selects.count();
+
+    if (selectCount > 0) {
+      console.log(`Found ${selectCount} select element(s)`);
+
+      for (let i = 0; i < selectCount; i++) {
+        const select = selects.nth(i);
+        const options = await select.locator("option").allTextContents();
+        console.log(`Options in select ${i}:`, options);
+
+        const match = options.find(opt =>
+          opt.toLowerCase().includes(ADDRESS_QUERY)
+        );
+
+        if (match) {
+          console.log("Selecting matching property:", match);
+          await select.selectOption({ label: match }).catch(async () => {
+            const optionLocator = select.locator("option");
+            const count = await optionLocator.count();
+            for (let j = 0; j < count; j++) {
+              const txt = (await optionLocator.nth(j).textContent()) || "";
+              if (txt.toLowerCase().includes(ADDRESS_QUERY)) {
+                const value = await optionLocator.nth(j).getAttribute("value");
+                if (value) {
+                  await select.selectOption(value);
+                  break;
+                }
+              }
+            }
+          });
+          break;
+        }
+      }
+    } else {
+      console.log("No select element found, trying clickable text match");
+
+      const addressLink = page.locator(`text=${ADDRESS_QUERY}`).first();
+      if (await addressLink.count()) {
+        await addressLink.click().catch(() => {});
+      }
     }
 
-    const bodyText = ((await page.textContent("body")) || "").toLowerCase();
-    console.log("Scanning page for collection date...");
+    // Click any follow-up button if present
+    const buttonsToTry = [
+      "Continue",
+      "Submit",
+      "Find",
+      "View",
+      "Next"
+    ];
 
-    const dateMatch = bodyText.match(/\b\d{1,2}\s+[a-z]+\s+\d{4}\b/);
-    if (!dateMatch) {
+    for (const label of buttonsToTry) {
+      const btn = page.getByText(label, { exact: true });
+      if (await btn.isVisible().catch(() => false)) {
+        console.log(`Clicking follow-up button: ${label}`);
+        await btn.click().catch(() => {});
+        await page.waitForLoadState("networkidle").catch(() => {});
+        break;
+      }
+    }
+
+    const bodyText2 = ((await page.textContent("body")) || "").toLowerCase();
+    console.log("Scanning page for collection date...");
+    console.log(bodyText2.slice(0, 1500));
+
+    // Collect all date-like strings and use the first one
+    const matches = bodyText2.match(/\b\d{1,2}\s+[a-z]+\s+\d{4}\b/g);
+    if (!matches || matches.length === 0) {
       return null;
     }
 
-    return dateMatch[0];
+    console.log("Date candidates found:", matches);
+    return matches[0];
   } finally {
     await browser.close();
   }
@@ -109,7 +168,5 @@ async function run() {
     process.exit(1);
   }
 }
-
-run();
 
 run();

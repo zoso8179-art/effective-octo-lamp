@@ -202,7 +202,7 @@ async function run() {
       process.exit(1);
     }
 
-    const dueTomorrow = collections.slice(0, 1);
+    const dueTomorrow = collections.filter(c => c.date === tomorrowText);
 
     if (!dueTomorrow.length) {
       console.log("No reminder needed today.");
@@ -217,7 +217,7 @@ async function run() {
     const message =
       `🗑️ Derby Bin Reminder\n\n` +
       `${messageLines.join("\n")}\n\n` +
-      `Tomorrow\n` +
+      `Collection: ${tomorrowText}\n` +
       `Put it out tonight.`;
 
     await sendReminder(message);
@@ -228,4 +228,3 @@ async function run() {
     process.exit(1);
   }
 }
-run();

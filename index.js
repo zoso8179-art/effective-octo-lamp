@@ -2,6 +2,8 @@ require("dotenv").config();
 const { chromium } = require("playwright");
 const twilio = require("twilio");
 
+console.log("DEBUG VERSION LIVE - PARKFIELDS V2");
+
 const POSTCODE = (process.env.POSTCODE || "").trim();
 const ADDRESS_QUERY = (process.env.ADDRESS_QUERY || "").toLowerCase().trim();
 

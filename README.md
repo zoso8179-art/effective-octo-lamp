@@ -1,42 +1,27 @@
-# Bin Reminder - WhatsApp Conversational Bot
+# Derby Bin Bot
 
-A Derby bin reminder service that works through WhatsApp.
+A conversational WhatsApp bin reminder bot for Derby.
 
-## What it does
+## Current live settings for your account
 
-- User sends `JOIN`
-- Bot asks for postcode
-- Bot asks for address
-- Bot stores the user
-- User receives a WhatsApp reminder at 18:00 the night before collection
+Twilio WhatsApp sandbox number:
++1 415 523 8886
 
-## Commands
+Sandbox join phrase for this account:
+join path-avoid
 
-- `JOIN`
-- `NEXT`
-- `STOP`
-- `START`
-- `HELP`
+Railway public domain:
+https://effective-octo-lamp-production.up.railway.app
 
-## Deployment
+Twilio webhook:
+https://effective-octo-lamp-production.up.railway.app/whatsapp
 
-Deploy to Railway using the Dockerfile.
+Health check:
+https://effective-octo-lamp-production.up.railway.app/health
 
-## Required environment variables
+## Notes
 
-- `APP_NAME`
-- `PORT`
-- `TIMEZONE`
-- `DATA_DIR`
-- `RUN_KEY`
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_FROM`
-
-## Railway notes
-
-- Expose the service publicly
-- Mount a persistent volume to `/data`
-- Twilio WhatsApp webhook should point to `/whatsapp`
-- Use a scheduled trigger for `/run-reminders?key=YOUR_RUN_KEY`
-- Reminder time should be 18:00 Europe/London
+- The sandbox join phrase is account-specific.
+- Reminder copy says 18:00.
+- Set your scheduled trigger to call:
+  /run-reminders?key=YOUR_RUN_KEY

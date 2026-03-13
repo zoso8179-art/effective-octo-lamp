@@ -1,0 +1,14 @@
+I'm testing a WhatsApp bin reminder for Derby.
+
+Could you try it for me?
+
+1. Open WhatsApp and message this number
++1 415 523 8886
+
+2. Send this message first
+join path-avoid
+
+3. Then send
+JOIN
+
+The bot will ask for your postcode and address and will set up a reminder the evening before bin day.

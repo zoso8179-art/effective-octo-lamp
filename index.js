@@ -2,6 +2,8 @@ require("dotenv").config();
 const { chromium } = require("playwright");
 const twilio = require("twilio");
 
+console.log("DEBUG VERSION LIVE - PARKFIELDS V4");
+
 const POSTCODE = (process.env.POSTCODE || "").trim();
 const ADDRESS_QUERY = (process.env.ADDRESS_QUERY || "").toLowerCase().trim();
 
@@ -32,25 +34,6 @@ function getTomorrowText() {
     .toLowerCase();
 }
 
-function binLabelAndEmoji(binType) {
-  const t = (binType || "").toLowerCase();
-
-  if (t.includes("recycl")) {
-    return { label: "Recycling", emoji: "🟦" };
-  }
-  if (t.includes("garden")) {
-    return { label: "Garden waste", emoji: "🟫" };
-  }
-  if (t.includes("food")) {
-    return { label: "Food waste", emoji: "🟩" };
-  }
-  if (t.includes("general") || t.includes("black")) {
-    return { label: "General waste", emoji: "⬛" };
-  }
-
-  return { label: "Bin collection", emoji: "🗑️" };
-}
-
 function classifyBinType(text) {
   const t = (text || "").toLowerCase();
 
@@ -70,13 +53,30 @@ function classifyBinType(text) {
   return "unknown";
 }
 
+function binLabelAndEmoji(binType) {
+  const t = (binType || "").toLowerCase();
+
+  if (t.includes("recycl")) {
+    return { label: "Recycling", emoji: "🟦" };
+  }
+  if (t.includes("garden")) {
+    return { label: "Garden waste", emoji: "🟫" };
+  }
+  if (t.includes("food")) {
+    return { label: "Food waste", emoji: "🟩" };
+  }
+  if (t.includes("general") || t.includes("black")) {
+    return { label: "General waste", emoji: "⬛" };
+  }
+
+  return { label: "Bin collection", emoji: "🗑️" };
+}
+
 function extractBinCollections(bodyText) {
   const text = normaliseText(bodyText);
 
-  // Derby seems to return the schedule as one long line sometimes,
-  // so match each full "weekday, date: bin type" pattern directly.
   const pattern =
-    /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday),\s+(\d{1,2}\s+[a-z]+\s+\d{4})\s*:\s*([^\\n]+?bin collection)/gi;
+    /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday),\s+(\d{1,2}\s+[a-z]+\s+\d{4})\s*:\s*([a-z ]+?bin collection)\b/gi;
 
   const results = [];
   let match;
@@ -93,7 +93,6 @@ function extractBinCollections(bodyText) {
     });
   }
 
-  // Deduplicate exact duplicates
   const seen = new Set();
   return results.filter(item => {
     const key = `${item.date}__${item.binType}__${item.description}`;
@@ -198,12 +197,12 @@ async function run() {
     const tomorrowText = getTomorrowText();
     const collections = await lookupBinCollections();
 
+    console.log("Collections found:", collections);
+
     if (!collections.length) {
       console.log("Could not determine bin collections.");
       process.exit(1);
     }
-
-    console.log("Collections found:", collections);
 
     const dueTomorrow = collections.filter(c => c.date === tomorrowText);
 
@@ -212,7 +211,6 @@ async function run() {
       process.exit(0);
     }
 
-    // If multiple bins are due tomorrow, list them all
     const messageLines = dueTomorrow.map(item => {
       const { label, emoji } = binLabelAndEmoji(item.binType);
       return `${emoji} ${label}`;
@@ -226,6 +224,7 @@ async function run() {
     process.exit(0);
   } catch (err) {
     console.error("Run failed:", err.message);
+    console.error(err);
     process.exit(1);
   }
 }

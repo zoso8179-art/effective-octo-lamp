@@ -52,68 +52,39 @@ async function lookupBinDay() {
     const selects = page.locator("select");
     const selectCount = await selects.count();
 
-    if (selectCount > 0) {
-      console.log(`Found ${selectCount} select element(s)`);
+if (selectCount > 0) {
+  console.log(`Found ${selectCount} select element(s)`);
 
-      for (let i = 0; i < selectCount; i++) {
-        const select = selects.nth(i);
-        const options = await select.locator("option").allTextContents();
-        console.log(`Options in select ${i}:`, options);
+  for (let i = 0; i < selectCount; i++) {
+    const select = selects.nth(i);
+    const options = await select.locator("option").allTextContents();
+    console.log(`Options in select ${i}:`, options);
 
-        const match = options.find(opt =>
-          opt.toLowerCase().includes(ADDRESS_QUERY)
-        );
+    const match = options.find(opt =>
+      opt.toLowerCase().includes(ADDRESS_QUERY)
+    );
 
-        if (match) {
-     console.log("Selecting matching property:", match);
-await select.selectOption({ label: match });
+    if (match) {
+      console.log("Selecting matching property:", match);
+      await select.selectOption({ label: match });
 
-// submit the form
-await page.locator("button, input[type=submit]").first().click();
-await page.waitForLoadState("networkidle");
-            const optionLocator = select.locator("option");
-            const count = await optionLocator.count();
-            for (let j = 0; j < count; j++) {
-              const txt = (await optionLocator.nth(j).textContent()) || "";
-              if (txt.toLowerCase().includes(ADDRESS_QUERY)) {
-                const value = await optionLocator.nth(j).getAttribute("value");
-                if (value) {
-                  await select.selectOption(value);
-                  break;
-                }
-              }
-            }
-          });
-          break;
-        }
-      }
-    } else {
-      console.log("No select element found, trying clickable text match");
+      // submit the form after selecting the property
+      const submitButton = page.locator('button, input[type="submit"]').first();
+      await submitButton.click();
+      await page.waitForLoadState("networkidle");
 
-      const addressLink = page.locator(`text=${ADDRESS_QUERY}`).first();
-      if (await addressLink.count()) {
-        await addressLink.click().catch(() => {});
-      }
+      break;
     }
+  }
+} else {
+  console.log("No select element found, trying clickable text match");
 
-    // Click any follow-up button if present
-    const buttonsToTry = [
-      "Continue",
-      "Submit",
-      "Find",
-      "View",
-      "Next"
-    ];
-
-    for (const label of buttonsToTry) {
-      const btn = page.getByText(label, { exact: true });
-      if (await btn.isVisible().catch(() => false)) {
-        console.log(`Clicking follow-up button: ${label}`);
-        await btn.click().catch(() => {});
-        await page.waitForLoadState("networkidle").catch(() => {});
-        break;
-      }
-    }
+  const addressLink = page.locator(`text=${ADDRESS_QUERY}`).first();
+  if (await addressLink.count()) {
+    await addressLink.click();
+    await page.waitForLoadState("networkidle");
+  }
+}
 
     const bodyText2 = ((await page.textContent("body")) || "").toLowerCase();
     console.log("Scanning page for collection date...");

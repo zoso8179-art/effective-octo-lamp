@@ -121,7 +121,7 @@ async function run() {
       })
       .toLowerCase();
 
-    if (nextDate.includes(tomorrowText)) {
+    if (true) {
       await sendReminder(
         "Reminder: your bin collection is tomorrow. Put your bins out tonight."
       );

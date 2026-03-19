@@ -1,0 +1,80 @@
+TEST PROCESS — V8 Derby Bin Reminder
+=====================================
+
+STEP 1 — Join the Twilio sandbox
+---------------------------------
+Open this link and press Send:
+https://wa.me/14155238886?text=join%20path-avoid
+
+Wait for Twilio to confirm you've joined before continuing.
+
+
+STEP 2 — Start onboarding
+--------------------------
+Send any message to the bot number (+1 415 523 8886 on WhatsApp).
+
+You should receive:
+  "Derby Bin Reminder — Never forget bin day again. Send your postcode"
+
+
+STEP 3 — Register
+------------------
+1. Send your Derby postcode (e.g. DE1 1AA)
+   → Bot should validate it and ask you to confirm
+
+2. Send YES to confirm
+   → Bot should confirm you're set and show next collection date
+
+
+STEP 4 — Test commands (all should work once active)
+-----------------------------------------------------
+NEXT        → should return next collection date and bin type
+TOMORROW    → should say either the bin type or "No collection tomorrow"
+STOP        → should pause reminders
+START       → should resume reminders
+HELP        → should list all commands
+RESET       → should clear your registration and restart onboarding
+
+
+STEP 5 — Test validation
+-------------------------
+Start a fresh registration (use RESET) and try these:
+
+Bad postcode inputs to test:
+  "hello"       → should reject with error message
+  "DE11AA"      → should reject (no space — though bot normalises spacing, check behaviour)
+  "SW1A 1AA"    → valid UK postcode but not Derby — bot accepts it (postcode-only validation)
+  "DE1 1AA"     → should accept
+
+
+STEP 6 — Test /run-reminders
+-----------------------------
+Call in browser or curl (replace YOUR_RUN_KEY):
+  https://your-app.up.railway.app/run-reminders?key=YOUR_RUN_KEY
+
+Should return:
+  {"ok":true,"sent":0,"errors":0,"checked":1}
+
+(sent will be 0 unless tomorrow is actually a collection day)
+
+
+STEP 7 — Check /health
+-----------------------
+  https://your-app.up.railway.app/health
+
+Should return version "v8", active_users count, total_users count.
+
+
+STEP 8 — Check persistence
+---------------------------
+Restart the Railway service (or redeploy).
+Send NEXT — you should still be registered (users.json loaded on startup).
+Check Railway logs for: "[startup] Loaded X user(s) from storage"
+
+
+KNOWN SCRAPER NOTE
+------------------
+The scraper hits the Derby Council website. If it returns 0 collections,
+check Railway logs for "[scraper]" lines. The council may have changed
+their page structure. In that case the scraper selectors in getCollections()
+will need updating to match the new HTML.

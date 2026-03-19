@@ -15,7 +15,7 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-// ─── Persistent user storage ─────────────────────────────────────────────────
+// ─── Persistent user storage ──────────────────────────────────────────────────
 const USERS_FILE = path.join(__dirname, "users.json");
 
 function loadUsers() {
@@ -39,6 +39,88 @@ function saveUsers() {
 
 const users = loadUsers();
 console.log(`[startup] Loaded ${Object.keys(users).length} user(s) from storage`);
+
+// ─── Bin content info ─────────────────────────────────────────────────────────
+const BIN_INFO = {
+  blue: `🔵 Blue bin — Dry recycling
+
+✅ Yes:
+• Paper & cardboard (magazines, boxes, envelopes)
+• Food tins & drinks cans (rinsed)
+• Plastic bottles, pots & trays (rinse & squash)
+• Glass bottles & jars (rinse, remove lids)
+• Juice/soup cartons
+• Aerosol cans
+• Clean foil & foil trays
+• Empty plastic & metal tubes
+
+❌ No:
+• Food waste
+• Nappies or sanitary products
+• Plastic bags or film
+• Clothing or textiles
+• Electricals, vapes or batteries
+• Polystyrene
+• Crisp packets or sweet wrappers
+
+Tip: Check, wash, squash before putting in.`,
+
+  black: `⚫ Black bin — General waste (last resort)
+
+✅ Yes:
+• Nappies & sanitary products
+• Non-recyclable plastics (crisp packets, cling film)
+• Polystyrene packaging
+• Disposable wipes & tissues
+• Broken crockery
+• Cat litter & pet waste (bagged)
+
+❌ No:
+• Anything recyclable (use blue bin)
+• Food or garden waste (use brown bin)
+• Electricals, batteries or vapes
+• Textiles — donate or sell instead
+• Bulky items — book a collection
+• Liquids, oils or paints
+
+Tip: Always bag and tie waste to protect crews.`,
+
+  brown: `🟤 Brown bin — Garden & food waste
+
+✅ Yes:
+• Grass cuttings, leaves & weeds
+• Hedge & shrub clippings
+• Flowers & plants
+• Small twigs & branches
+• Food waste (from 30 March 2026 use the green container instead)
+
+❌ No:
+• Plastic bags or pots
+• Soil or rubble
+• Meat, fish or cooked food (goes in green food container)
+• Pet waste
+
+Note: Garden waste collection requires a brown bin subscription — sign up via Derby City Council.`,
+
+  food: `🟢 Green container — Food waste
+
+✅ Yes:
+• Fruit & vegetable scraps
+• Meat, fish & bones
+• Cooked food & leftovers
+• Dairy products
+• Tea bags & coffee grounds
+• Bread & pastries
+• Eggshells
+
+❌ No:
+• Plastic bags (use compostable liners only)
+• Liquids
+• Packaging of any kind
+
+Tip: Use compostable liners to keep your container clean.
+Rolling out from 30 March 2026 across Derby.`
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const UK_POSTCODE = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i;
@@ -66,7 +148,6 @@ function buildReminder(bin) {
     garden: "🟤",
     food: "🟢"
   };
-
   return `🗑️ Bin Reminder
 
 ${capitalise(bin.date)}:
@@ -76,46 +157,96 @@ Put it out tonight 👍`;
 }
 
 // ─── Scraper ──────────────────────────────────────────────────────────────────
-async function getCollections(postcode) {
-  const url = `https://www.derby.gov.uk/environment/bins-and-recycling/bin-collection-day/?uprn=&postcode=${encodeURIComponent(postcode)}`;
+// Derby Council bin checker works in two steps:
+// 1. GET SelectProperty?postcode=XX  →  HTML with <select> of addresses + UPRN values
+// 2. GET /binday/{UPRN}?address=...  →  HTML with .binresult divs containing dates
+//
+// The house parameter (number or name) matches the correct property in the dropdown.
+// Falls back to the first property if no match found.
+
+async function getCollections(postcode, house) {
+  const axiosOpts = {
+    timeout: 10000,
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; BinReminderBot/8.0)" }
+  };
+
   try {
-    const response = await axios.get(url, {
-      timeout: 10000,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; BinReminderBot/8.0)"
-      }
-    });
+    // Step 1 — postcode lookup
+    const cleanPostcode = postcode.replace(/\s+/g, "").toUpperCase();
+    const step1Url = `https://secure.derby.gov.uk/binday/SelectProperty?postcode=${encodeURIComponent(cleanPostcode)}`;
+    console.log(`[scraper] Step 1: ${step1Url}`);
 
-    const $ = cheerio.load(response.data);
-    const collections = [];
+    const step1 = await axios.get(step1Url, axiosOpts);
+    const $1 = cheerio.load(step1.data);
 
-    // Strategy 1: look for structured table or list rows with dates
-    $("table tr, .bin-collection, .collection-row, li").each((i, el) => {
-      const rowText = $(el).text().toLowerCase().trim();
-      const dateMatch = rowText.match(/(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/);
-      const typeMatch = rowText.match(/\b(general waste|recycling|garden|food)\b/);
-      if (dateMatch && typeMatch) {
-        const dateStr = `${dateMatch[1]} ${dateMatch[2]} ${dateMatch[3]}`;
-        if (!collections.find(c => c.date === dateStr && c.binType === typeMatch[1])) {
-          collections.push({ date: dateStr, binType: typeMatch[1] });
+    // Dropdown option text examples:
+    //   "14 Smith Street, Derby, DE1 1AA"
+    //   "Rosewood, 14 Smith Street, Derby, DE1 1AA"
+    let selectedOption = null;
+
+    if (house) {
+      const h = house.trim().toLowerCase();
+      $1("select#SelectedUprn option[value!='']").each((i, el) => {
+        const optText = $1(el).text().trim().toLowerCase();
+        if (
+          optText.startsWith(h + " ") ||
+          optText.startsWith(h + ",") ||
+          optText.includes(", " + h + " ") ||
+          optText.includes(", " + h + ",")
+        ) {
+          selectedOption = $1(el);
+          return false; // break
         }
-      }
-    });
+      });
 
-    // Strategy 2: fallback regex over full body text if nothing found above
-    if (collections.length === 0) {
-      const bodyText = $("body").text().toLowerCase();
-      const regex = /(\d{1,2}\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4})[^\n]*?(general waste|recycling|garden|food)/g;
-      const matches = [...bodyText.matchAll(regex)];
-      for (const m of matches) {
-        const dateStr = m[1].replace(/\s+/g, " ").trim();
-        if (!collections.find(c => c.date === dateStr && c.binType === m[2])) {
-          collections.push({ date: dateStr, binType: m[2] });
-        }
+      if (!selectedOption) {
+        console.warn(`[scraper] No match for house "${house}" in ${postcode} — using first property`);
       }
     }
 
-    console.log(`[scraper] ${postcode} → ${collections.length} collection(s) found`);
+    if (!selectedOption) {
+      selectedOption = $1("select#SelectedUprn option[value!='']").first();
+    }
+
+    const uprn = selectedOption.attr("value");
+    const address = selectedOption.text().trim();
+
+    if (!uprn) {
+      console.error(`[scraper] No properties found for postcode: ${postcode}`);
+      return [];
+    }
+
+    console.log(`[scraper] Using UPRN ${uprn} → ${address}`);
+
+    // Step 2 — fetch bin days
+    const step2Url = `https://secure.derby.gov.uk/binday/${uprn}?address=${encodeURIComponent(address)}`;
+    console.log(`[scraper] Step 2: ${step2Url}`);
+
+    const step2 = await axios.get(step2Url, axiosOpts);
+    const $2 = cheerio.load(step2.data);
+
+    const collections = [];
+
+    // Each entry: <p><strong>Wednesday, 25 March 2026:</strong> Recycling blue bin collection</p>
+    $2(".binresult .mainbintext p").each((i, el) => {
+      const text = $2(el).text().trim();
+      const strongText = $2(el).find("strong").text();
+      const dateMatch = strongText.match(
+        /(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})/i
+      );
+      const typeMatch = text.match(/\b(general waste|recycling|garden|food waste|food)\b/i);
+
+      if (dateMatch && typeMatch) {
+        const dateStr = `${parseInt(dateMatch[1])} ${dateMatch[2].toLowerCase()} ${dateMatch[3]}`;
+        let binType = typeMatch[1].toLowerCase();
+        if (binType === "food waste") binType = "food";
+        if (!collections.find(c => c.date === dateStr && c.binType === binType)) {
+          collections.push({ date: dateStr, binType });
+        }
+      }
+    });
+
+    console.log(`[scraper] ${postcode} "${house || "first"}" → ${collections.length} collection(s) found`);
     return collections;
 
   } catch (err) {
@@ -126,13 +257,13 @@ async function getCollections(postcode) {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send("V8 Derby Bin Reminder is running");
+  res.send("V10 Derby Bin Reminder is running");
 });
 
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    version: "v8",
+    version: "v10",
     app: "Derby Bin Reminder",
     timezone: "Europe/London",
     reminder_time: "18:00",
@@ -163,7 +294,7 @@ Send your postcode (e.g. DE1 1AA):`));
   const user = users[from];
   const upper = text.toUpperCase().trim();
 
-  // RESET always available
+  // RESET — always available
   if (upper === "RESET") {
     delete users[from];
     saveUsers();
@@ -172,7 +303,24 @@ Send your postcode (e.g. DE1 1AA):`));
 Send your postcode (e.g. DE1 1AA):`));
   }
 
-  // Commands only available once active
+  // BINS commands — available to everyone, even mid-onboarding
+  if (upper === "BINS") {
+    return res.send(twiml(`What goes in each bin?
+
+🔵 BLUE – dry recycling
+⚫ BLACK – general waste
+🟤 BROWN – garden waste
+🟢 FOOD – food waste
+
+Reply with the colour for details.`));
+  }
+
+  if (upper === "BLUE")  return res.send(twiml(BIN_INFO.blue));
+  if (upper === "BLACK") return res.send(twiml(BIN_INFO.black));
+  if (upper === "BROWN") return res.send(twiml(BIN_INFO.brown));
+  if (upper === "FOOD")  return res.send(twiml(BIN_INFO.food));
+
+  // ── Active user commands ───────────────────────────────────────────────────
   if (user.step === "active") {
     if (upper === "STOP") {
       user.paused = true;
@@ -189,14 +337,15 @@ Send your postcode (e.g. DE1 1AA):`));
     if (upper === "HELP") {
       return res.send(twiml(`Commands:
 NEXT – next collection
-TOMORROW – is there a collection tomorrow?
+TOMORROW – collection tomorrow?
+BINS – what goes in each bin
 STOP – pause reminders
 START – resume reminders
-RESET – change your postcode`));
+RESET – change your address`));
     }
 
     if (upper === "NEXT") {
-      const collections = await getCollections(user.postcode);
+      const collections = await getCollections(user.postcode, user.house);
       if (!collections.length) {
         return res.send(twiml("I couldn't find your next collection right now. Try again later."));
       }
@@ -206,34 +355,47 @@ ${capitalise(c.date)} – ${capitalise(c.binType)}`));
     }
 
     if (upper === "TOMORROW") {
-      const collections = await getCollections(user.postcode);
+      const collections = await getCollections(user.postcode, user.house);
       const tomorrowText = getTomorrowString();
       const match = collections.find((d) => d.date === tomorrowText);
       if (!match) return res.send(twiml("No bin collection tomorrow."));
       return res.send(twiml(buildReminder(match)));
     }
+
+    return res.send(twiml("Send HELP for available commands."));
   }
 
-  // Onboarding: step = postcode
+  // ── Onboarding: postcode ───────────────────────────────────────────────────
   if (user.step === "postcode") {
     if (!UK_POSTCODE.test(text)) {
       return res.send(twiml("That doesn't look like a valid postcode.\n\nPlease send your postcode (e.g. DE1 1AA):"));
     }
     user.postcode = text.toUpperCase().replace(/\s+/g, " ").trim();
+    user.step = "house";
+    saveUsers();
+    return res.send(twiml(`Got it 👍
+
+Now send your house number or name:
+(e.g. 14  or  Rosewood)`));
+  }
+
+  // ── Onboarding: house number/name ─────────────────────────────────────────
+  if (user.step === "house") {
+    user.house = text.trim();
     user.step = "confirm";
     saveUsers();
     return res.send(twiml(`Got it 👍
 
-Postcode: ${user.postcode}
+Address: ${user.house}, ${user.postcode}
 
-Reply YES to confirm, or send a different postcode to correct it.`));
+Reply YES to confirm, or send a different postcode to start again.`));
   }
 
-  // Onboarding: step = confirm
+  // ── Onboarding: confirm ───────────────────────────────────────────────────
   if (user.step === "confirm") {
     if (upper === "YES") {
-      console.log(`[onboarding] New user confirmed: ${from} → ${user.postcode}`);
-      const collections = await getCollections(user.postcode);
+      console.log(`[onboarding] Confirmed: ${from} → ${user.house}, ${user.postcode}`);
+      const collections = await getCollections(user.postcode, user.house);
       user.step = "active";
       saveUsers();
 
@@ -256,23 +418,19 @@ You'll get a reminder at 18:00 the night before.
 Send HELP for commands.`));
     }
 
-    // They sent a new postcode instead of YES — treat it as a correction
+    // They sent a new postcode — let them re-enter house number too
     if (UK_POSTCODE.test(text)) {
       user.postcode = text.toUpperCase().replace(/\s+/g, " ").trim();
+      user.step = "house";
       saveUsers();
       return res.send(twiml(`Updated 👍
 
 Postcode: ${user.postcode}
 
-Reply YES to confirm.`));
+Now send your house number or name:`));
     }
 
-    return res.send(twiml(`Reply YES to confirm your postcode (${user.postcode}), or send a new postcode to correct it.`));
-  }
-
-  // Active user sends something unrecognised
-  if (user.step === "active") {
-    return res.send(twiml("Send HELP for available commands."));
+    return res.send(twiml(`Reply YES to confirm your address (${user.house}, ${user.postcode}), or send a new postcode to correct it.`));
   }
 
   return res.send(twiml("Send HELP for available commands."));
@@ -293,18 +451,19 @@ app.get("/run-reminders", async (req, res) => {
 
   console.log(`[reminders] ${activeUsers.length} active user(s) to check`);
 
-  // Cache scrape results per postcode — avoid hitting the council site repeatedly
+  // Cache per postcode+house to avoid duplicate scrapes
   const cache = {};
   let sent = 0;
   let errors = 0;
 
   for (const [number, user] of activeUsers) {
     try {
-      if (!cache[user.postcode]) {
-        cache[user.postcode] = await getCollections(user.postcode);
+      const cacheKey = `${user.postcode}|${user.house || ""}`;
+      if (!cache[cacheKey]) {
+        cache[cacheKey] = await getCollections(user.postcode, user.house);
       }
 
-      const match = cache[user.postcode].find((d) => d.date === tomorrowText);
+      const match = cache[cacheKey].find((d) => d.date === tomorrowText);
 
       if (match) {
         await client.messages.create({
@@ -312,7 +471,7 @@ app.get("/run-reminders", async (req, res) => {
           to: number,
           body: buildReminder(match)
         });
-        console.log(`[reminders] Sent to ${number} (${user.postcode}) – ${match.binType}`);
+        console.log(`[reminders] Sent to ${number} (${user.house}, ${user.postcode}) – ${match.binType}`);
         sent++;
       }
     } catch (err) {
@@ -328,5 +487,5 @@ app.get("/run-reminders", async (req, res) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`V8 Derby Bin Reminder running on port ${PORT}`);
+  console.log(`V10 Derby Bin Reminder running on port ${PORT}`);
 });

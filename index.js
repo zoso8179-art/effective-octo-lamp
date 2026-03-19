@@ -313,18 +313,18 @@ Send your postcode (e.g. DE1 1AA):`));
   if (upper === "BINS") {
     return res.send(twiml(`What goes in each bin?
 
-🔵 BLUE – dry recycling
-⚫ BLACK – general waste
-🟤 BROWN – garden waste
-🟢 FOOD – food waste
+🔵 BLUE BIN – dry recycling
+⚫ BLACK BIN – general waste
+🟤 BROWN BIN – garden waste
+🟢 FOOD BIN – food waste
 
-Reply with the colour for details.`));
+Reply e.g. BLUE BIN for details.`));
   }
 
-  if (upper === "BLUE")  return res.send(twiml(BIN_INFO.blue));
-  if (upper === "BLACK") return res.send(twiml(BIN_INFO.black));
-  if (upper === "BROWN") return res.send(twiml(BIN_INFO.brown));
-  if (upper === "FOOD")  return res.send(twiml(BIN_INFO.food));
+  if (upper === "BLUE BIN")  return res.send(twiml(BIN_INFO.blue));
+  if (upper === "BLACK BIN") return res.send(twiml(BIN_INFO.black));
+  if (upper === "BROWN BIN") return res.send(twiml(BIN_INFO.brown));
+  if (upper === "FOOD BIN")  return res.send(twiml(BIN_INFO.food));
 
   // ── Active user commands ───────────────────────────────────────────────────
   if (user.step === "active") {

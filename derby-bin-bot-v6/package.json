@@ -1,16 +1,15 @@
 {
-  "name": "derby-bin-bot-v6",
+  "name": "derby-bin-bot",
   "version": "6.0.0",
-  "description": "Derby Bin Reminder with adapter architecture and low-friction onboarding",
-  "main": "src/server.js",
+  "description": "Derby WhatsApp Bin Reminder",
+  "main": "index.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "body-parser": "^1.20.3",
-    "dotenv": "^16.4.5",
-    "express": "^4.21.2",
-    "playwright": "1.58.2",
-    "twilio": "^5.4.0"
+    "axios": "^1.6.7",
+    "cheerio": "^1.0.0-rc.12",
+    "express": "^4.18.2",
+    "twilio": "^4.19.0"
   }
 }

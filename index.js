@@ -219,10 +219,16 @@ async function getCollections(postcode, house) {
     console.log(`[scraper] Using UPRN ${uprn} → ${address}`);
 
     // Step 2 — fetch bin days
-    const step2Url = `https://secure.derby.gov.uk/binday/${uprn}?address=${address}`;
+    const step2Url = `https://secure.derby.gov.uk/binday/BinDays/${uprn}?address=${address}`;
     console.log(`[scraper] Step 2: ${step2Url}`);
 
-    const step2 = await axios.get(step2Url, axiosOpts);
+    const step2 = await axios.get(step2Url, {
+      ...axiosOpts,
+      headers: {
+        ...axiosOpts.headers,
+        "Referer": `https://secure.derby.gov.uk/binday/SelectProperty?postcode=${cleanPostcode}`
+      }
+    });
     const $2 = cheerio.load(step2.data);
 
     const collections = [];

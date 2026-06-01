@@ -2,496 +2,306 @@ const express = require("express");
 const axios = require("axios");
 const cheerio = require("cheerio");
 const twilio = require("twilio");
-const fs = require("fs");
-const path = require("path");
-const { DateTime } = require("luxon");
+const { Pool } = require("pg");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+    process.env.TWILIO_ACCOUNT_SID,
+    process.env.TWILIO_AUTH_TOKEN
+  );
 
-// ─── Persistent user storage ──────────────────────────────────────────────────
-const USERS_FILE = path.join(__dirname, "users.json");
+// ── Database setup ──────────────────────────────────────────────────────────
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+});
 
-function loadUsers() {
-  try {
-    if (fs.existsSync(USERS_FILE)) {
-      return JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
-    }
-  } catch (err) {
-    console.error("[storage] Failed to load users.json:", err.message);
-  }
-  return {};
+async function setupDb() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+              phone       TEXT PRIMARY KEY,
+                    step        TEXT NOT NULL DEFAULT 'postcode',
+                          postcode    TEXT,
+                                house       TEXT,
+                                      paused      BOOLEAN NOT NULL DEFAULT false,
+                                            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                                                  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                                                      )
+                                                        `);
+    console.log("[db] Table ready");
 }
 
-function saveUsers() {
-  try {
-    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-  } catch (err) {
-    console.error("[storage] Failed to save users.json:", err.message);
-  }
+async function getUser(phone) {
+    const r = await pool.query("SELECT * FROM users WHERE phone = $1", [phone]);
+    return r.rows[0] || null;
 }
 
-const users = loadUsers();
-console.log(`[startup] Loaded ${Object.keys(users).length} user(s) from storage`);
+async function saveUser(phone, data) {
+    await pool.query(`
+        INSERT INTO users (phone, step, postcode, house, paused, updated_at)
+            VALUES ($1, $2, $3, $4, $5, NOW())
+                ON CONFLICT (phone) DO UPDATE SET
+                      step       = EXCLUDED.step,
+                            postcode   = EXCLUDED.postcode,
+                                  house      = EXCLUDED.house,
+                                        paused     = EXCLUDED.paused,
+                                              updated_at = NOW()
+                                                `, [phone, data.step, data.postcode || null, data.house || null, data.paused || false]);
+}
 
-// ─── Bin content info ─────────────────────────────────────────────────────────
-const BIN_INFO = {
-  blue: `🔵 Blue bin — Dry recycling
+async function deleteUser(phone) {
+    await pool.query("DELETE FROM users WHERE phone = $1", [phone]);
+}
 
-✅ Yes:
-• Paper & cardboard (magazines, boxes, envelopes)
-• Food tins & drinks cans (rinsed)
-• Plastic bottles, pots & trays (rinse & squash)
-• Glass bottles & jars (rinse, remove lids)
-• Juice/soup cartons
-• Aerosol cans
-• Clean foil & foil trays
-• Empty plastic & metal tubes
-
-❌ No:
-• Food waste
-• Nappies or sanitary products
-• Plastic bags or film
-• Clothing or textiles
-• Electricals, vapes or batteries
-• Polystyrene
-• Crisp packets or sweet wrappers
-
-Tip: Check, wash, squash before putting in.`,
-
-  black: `⚫ Black bin — General waste (last resort)
-
-✅ Yes:
-• Nappies & sanitary products
-• Non-recyclable plastics (crisp packets, cling film)
-• Polystyrene packaging
-• Disposable wipes & tissues
-• Broken crockery
-• Cat litter & pet waste (bagged)
-
-❌ No:
-• Anything recyclable (use blue bin)
-• Food or garden waste (use brown bin)
-• Electricals, batteries or vapes
-• Textiles — donate or sell instead
-• Bulky items — book a collection
-• Liquids, oils or paints
-
-Tip: Always bag and tie waste to protect crews.`,
-
-  brown: `🟤 Brown bin — Garden & food waste
-
-✅ Yes:
-• Grass cuttings, leaves & weeds
-• Hedge & shrub clippings
-• Flowers & plants
-• Small twigs & branches
-• Food waste (from 30 March 2026 use the green container instead)
-
-❌ No:
-• Plastic bags or pots
-• Soil or rubble
-• Meat, fish or cooked food (goes in green food container)
-• Pet waste
-
-Note: Garden waste collection requires a brown bin subscription — sign up via Derby City Council.`,
-
-  food: `🟢 Green container — Food waste
-
-✅ Yes:
-• Fruit & vegetable scraps
-• Meat, fish & bones
-• Cooked food & leftovers
-• Dairy products
-• Tea bags & coffee grounds
-• Bread & pastries
-• Eggshells
-
-❌ No:
-• Plastic bags (use compostable liners only)
-• Liquids
-• Packaging of any kind
-
-Tip: Use compostable liners to keep your container clean.
-Rolling out from 30 March 2026 across Derby.`
-};
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-const UK_POSTCODE = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i;
-
+// ── Helpers ─────────────────────────────────────────────────────────────────
 function twiml(text) {
-  return `<Response><Message>${text}</Message></Response>`;
-}
-
-function getTomorrowString() {
-  return DateTime.now()
-    .setZone("Europe/London")
-    .plus({ days: 1 })
-    .toFormat("d MMMM yyyy")
-    .toLowerCase();
-}
-
-function capitalise(str) {
-  return str.charAt(0).toUpperCase() + str.slice(1);
+    return `<Response><Message>${text}</Message></Response>`;
 }
 
 function buildReminder(bin) {
-  const icons = {
-    recycling: "🔵",
-    "general waste": "⚫",
-    garden: "🟤",
-    food: "🟢"
-  };
-  return `🗑️ Bin Reminder
+    const icons = {
+          recycling: "🔵",
+          "general waste": "⚫",
+          garden: "🟤",
+          food: "🟢"
+    };
+    return `🗑️ Bin Reminder
 
-${capitalise(bin.date)}:
-${icons[bin.binType] || "🗑️"} ${capitalise(bin.binType)}
+    Tomorrow:
+    ${icons[bin.binType] || "🗑️"} ${bin.binType}
 
-Put it out tonight 👍`;
+    Put it out tonight 👍`;
 }
 
-// ─── Scraper ──────────────────────────────────────────────────────────────────
-// Derby Council bin checker works in two steps:
-// 1. GET SelectProperty?postcode=XX  →  HTML with <select> of addresses + UPRN values
-// 2. GET /binday/{UPRN}?address=...  →  HTML with .binresult divs containing dates
-//
-// The house parameter (number or name) matches the correct property in the dropdown.
-// Falls back to the first property if no match found.
-
+// ── Scraper (Derby Council two-step UPRN API) ────────────────────────────────
 async function getCollections(postcode, house) {
-  const axiosOpts = {
-    timeout: 10000,
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; BinReminderBot/8.0)" }
-  };
+    const axiosOpts = {
+          timeout: 10000,
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; BinReminderBot/10.0)" }
+    };
 
-  try {
-    // Step 1 — postcode lookup
-    const cleanPostcode = postcode.replace(/\s+/g, "").toUpperCase();
+  const cleanPostcode = postcode.replace(/\s+/g, "").toUpperCase();
     const step1Url = `https://secure.derby.gov.uk/binday/SelectProperty?postcode=${encodeURIComponent(cleanPostcode)}`;
     console.log(`[scraper] Step 1: ${step1Url}`);
 
-    const step1 = await axios.get(step1Url, axiosOpts);
+  const step1 = await axios.get(step1Url, axiosOpts);
     const $1 = cheerio.load(step1.data);
 
-    // Dropdown option text examples:
-    //   "14 Smith Street, Derby, DE1 1AA"
-    //   "Rosewood, 14 Smith Street, Derby, DE1 1AA"
-    let selectedOption = null;
+  let uprn = null;
+    let selectedAddress = null;
 
-    if (house) {
-      const h = house.trim().toLowerCase();
-      $1("select#SelectedUprn option[value!='']").each((i, el) => {
-        const optText = $1(el).text().trim().toLowerCase();
-        if (
-          optText.startsWith(h + " ") ||
-          optText.startsWith(h + ",") ||
-          optText.includes(", " + h + " ") ||
-          optText.includes(", " + h + ",")
-        ) {
-          selectedOption = $1(el);
-          return false; // break
+  $1("select option").each((_, el) => {
+        const val = $1(el).attr("value");
+        const label = $1(el).text().trim();
+        if (!val) return;
+        if (house && label.toLowerCase().includes(house.toLowerCase())) {
+                uprn = val;
+                selectedAddress = label;
         }
-      });
+        if (!uprn) {
+                uprn = val;
+                selectedAddress = label;
+        }
+  });
 
-      if (!selectedOption) {
-        console.warn(`[scraper] No match for house "${house}" in ${postcode} — using first property`);
-      }
-    }
+  if (!uprn) throw new Error("No properties found for postcode");
 
-    if (!selectedOption) {
-      selectedOption = $1("select#SelectedUprn option[value!='']").first();
-    }
+  console.log(`[scraper] Using UPRN ${uprn} -> ${selectedAddress}`);
 
-    const uprn = selectedOption.attr("value");
-    const address = selectedOption.text().trim();
-
-    if (!uprn) {
-      console.error(`[scraper] No properties found for postcode: ${postcode}`);
-      return [];
-    }
-
-    console.log(`[scraper] Using UPRN ${uprn} → ${address}`);
-
-    // Step 2 — fetch bin days
-    const step2Url = `https://secure.derby.gov.uk/binday/BinDays/${uprn}?address=${address}`;
+  const step2Url = `https://secure.derby.gov.uk/binday/BinDays/${uprn}?address=${encodeURIComponent(selectedAddress)}`;
     console.log(`[scraper] Step 2: ${step2Url}`);
 
-    const step2 = await axios.get(step2Url, {
-      ...axiosOpts,
-      headers: {
-        ...axiosOpts.headers,
-        "Referer": `https://secure.derby.gov.uk/binday/SelectProperty?postcode=${cleanPostcode}`
-      }
-    });
+  const step2 = await axios.get(step2Url, axiosOpts);
     const $2 = cheerio.load(step2.data);
 
-    const collections = [];
-
-    // Each entry: <p><strong>Wednesday, 25 March 2026:</strong> Recycling blue bin collection</p>
-    $2(".binresult .mainbintext p").each((i, el) => {
-      const text = $2(el).text().trim();
-      const strongText = $2(el).find("strong").text();
-      const dateMatch = strongText.match(
-        /(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})/i
-      );
-      const typeMatch = text.match(/\b(general waste|recycling|garden|food waste|food)\b/i);
-
-      if (dateMatch && typeMatch) {
-        const dateStr = `${parseInt(dateMatch[1])} ${dateMatch[2].toLowerCase()} ${dateMatch[3]}`;
-        let binType = typeMatch[1].toLowerCase();
-        if (binType === "food waste") binType = "food";
-        if (!collections.find(c => c.date === dateStr && c.binType === binType)) {
-          collections.push({ date: dateStr, binType });
-        }
-      }
+  const collections = [];
+    $2(".binresult, .bin-result, [class*='bin']").each((_, el) => {
+          const text = $2(el).text().trim().toLowerCase();
+          const dateMatch = text.match(/(\d{1,2}\s+\w+\s+\d{4})/);
+          const typeMatch = text.match(/(general waste|recycling|garden|food)/i);
+          if (dateMatch && typeMatch) {
+                  collections.push({
+                            date: dateMatch[1],
+                            binType: typeMatch[1].toLowerCase()
+                  });
+          }
     });
 
-    console.log(`[scraper] ${postcode} "${house || "first"}" → ${collections.length} collection(s) found`);
+  console.log(`[scraper] ${cleanPostcode} "${house}" -> ${collections.length} collection(s) found`);
     return collections;
-
-  } catch (err) {
-    console.error(`[scraper] Failed for ${postcode}:`, err.message);
-    return [];
-  }
 }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+// ── Routes ───────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send("V10 Derby Bin Reminder is running");
+    res.send("V11 Binday is running");
 });
 
-app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    version: "v10",
-    app: "Derby Bin Reminder",
-    timezone: "Europe/London",
-    reminder_time: "18:00",
-    active_users: Object.values(users).filter(u => u.step === "active").length,
-    total_users: Object.keys(users).length
-  });
+app.get("/health", async (req, res) => {
+    const r = await pool.query("SELECT COUNT(*) FROM users WHERE step = 'active'");
+    const total = await pool.query("SELECT COUNT(*) FROM users");
+    res.json({
+          ok: true,
+          version: "v11",
+          app: "Binday",
+          timezone: "Europe/London",
+          reminder_time: "18:00",
+          active_users: parseInt(r.rows[0].count),
+          total_users: parseInt(total.rows[0].count)
+    });
 });
 
 app.post("/whatsapp", async (req, res) => {
-  const text = (req.body.Body || "").trim();
-  const from = req.body.From;
+    const text = (req.body.Body || "").trim();
+    const from = req.body.From;
+    const upper = text.toUpperCase();
 
-  if (!from) {
-    return res.status(400).send("Bad request");
-  }
+           if (upper === "STOP") {
+                 const user = await getUser(from);
+                 if (user) await saveUser(from, { ...user, paused: true });
+                 return res.send(twiml("Reminders paused. Send START to resume."));
+           }
 
-  // New user — start onboarding
-  if (!users[from]) {
-    users[from] = { step: "postcode", paused: false };
-    saveUsers();
-    return res.send(twiml(`🗑️ Derby Bin Reminder
+           if (upper === "START") {
+                 const user = await getUser(from);
+                 if (user) await saveUser(from, { ...user, paused: false });
+                 return res.send(twiml("Reminders resumed 👍"));
+           }
 
-Never forget bin day again.
+           if (upper === "RESET") {
+                 await deleteUser(from);
+                 return res.send(twiml("Cleared. Send your postcode to start again."));
+           }
 
-Send your postcode (e.g. DE1 1AA):`));
-  }
+           if (upper === "HELP") {
+                 return res.send(twiml(`Commands:
+                 NEXT - next collection
+                 TOMORROW - is there a collection tomorrow?
+                 STOP - pause reminders
+                 START - resume reminders
+                 RESET - start over`));
+           }
 
-  const user = users[from];
-  const upper = text.toUpperCase().trim();
+           let user = await getUser(from);
 
-  // RESET — always available
-  if (upper === "RESET") {
-    delete users[from];
-    saveUsers();
-    return res.send(twiml(`Starting over 🔄
+           if (!user) {
+                 await saveUser(from, { step: "postcode", paused: false });
+                 return res.send(twiml(`Binday
 
-Send your postcode (e.g. DE1 1AA):`));
-  }
+                 Never miss bin day again.
 
-  // BINS commands — available to everyone, even mid-onboarding
-  if (upper === "BINS") {
-    return res.send(twiml(`What goes in each bin?
+                 Send your postcode:`));
+           }
 
-🔵 BLUE BIN – dry recycling
-⚫ BLACK BIN – general waste
-🟤 BROWN BIN – garden waste
-🟢 FOOD BIN – food waste
+           if (user.step === "postcode") {
+                 await saveUser(from, { ...user, step: "house", postcode: text.toUpperCase() });
+                 return res.send(twiml(`Got it
 
-Reply e.g. BLUE BIN for details.`));
-  }
+                 Now send your house number:`));
+           }
 
-  if (upper === "BLUE BIN")  return res.send(twiml(BIN_INFO.blue));
-  if (upper === "BLACK BIN") return res.send(twiml(BIN_INFO.black));
-  if (upper === "BROWN BIN") return res.send(twiml(BIN_INFO.brown));
-  if (upper === "FOOD BIN")  return res.send(twiml(BIN_INFO.food));
+           if (user.step === "house") {
+                 await saveUser(from, { ...user, step: "confirm", house: text });
+                 return res.send(twiml(`Found:
+                 ${text} ${user.postcode}
 
-  // ── Active user commands ───────────────────────────────────────────────────
-  if (user.step === "active") {
-    if (upper === "STOP") {
-      user.paused = true;
-      saveUsers();
-      return res.send(twiml("Reminders paused ⏸️\n\nSend START to resume."));
-    }
+                 Reply YES to confirm`));
+           }
 
-    if (upper === "START") {
-      user.paused = false;
-      saveUsers();
-      return res.send(twiml("Reminders resumed ✅"));
-    }
+           if (user.step === "confirm") {
+                 if (upper !== "YES") {
+                         return res.send(twiml("Reply YES to confirm, or RESET to start over."));
+                 }
+                 await saveUser(from, { ...user, step: "active" });
 
-    if (upper === "HELP") {
-      return res.send(twiml(`Commands:
-NEXT – next collection
-TOMORROW – collection tomorrow?
-BINS – what goes in each bin
-STOP – pause reminders
-START – resume reminders
-RESET – change your address`));
-    }
+      let nextLine = "";
+                 try {
+                         const collections = await getCollections(user.postcode, user.house);
+                         if (collections.length) {
+                                   nextLine = `\nNext collection:\n${collections[0].date} - ${collections[0].binType}`;
+                         }
+                 } catch (e) {
+                         console.error("[confirm] scraper error:", e.message);
+                 }
 
-    if (upper === "NEXT") {
-      const collections = await getCollections(user.postcode, user.house);
-      if (!collections.length) {
-        return res.send(twiml("I couldn't find your next collection right now. Try again later."));
-      }
-      const c = collections[0];
-      return res.send(twiml(`Next collection:
-${capitalise(c.date)} – ${capitalise(c.binType)}`));
-    }
+      return res.send(twiml(`You're set${nextLine}
 
-    if (upper === "TOMORROW") {
-      const collections = await getCollections(user.postcode, user.house);
-      const tomorrowText = getTomorrowString();
-      const match = collections.find((d) => d.date === tomorrowText);
-      if (!match) return res.send(twiml("No bin collection tomorrow."));
-      return res.send(twiml(buildReminder(match)));
-    }
+      You'll get a reminder at 18:00 the night before collection.
 
-    return res.send(twiml("Send HELP for available commands."));
-  }
+      Reply HELP anytime.`));
+           }
 
-  // ── Onboarding: postcode ───────────────────────────────────────────────────
-  if (user.step === "postcode") {
-    if (!UK_POSTCODE.test(text)) {
-      return res.send(twiml("That doesn't look like a valid postcode.\n\nPlease send your postcode (e.g. DE1 1AA):"));
-    }
-    user.postcode = text.toUpperCase().replace(/\s+/g, " ").trim();
-    user.step = "house";
-    saveUsers();
-    return res.send(twiml(`Got it 👍
+           if (upper === "NEXT") {
+                 try {
+                         const collections = await getCollections(user.postcode, user.house);
+                         if (!collections.length) return res.send(twiml("I couldn't find your next collection right now. Try again later."));
+                         return res.send(twiml(`Next:\n${collections[0].date} - ${collections[0].binType}`));
+                 } catch (e) {
+                         return res.send(twiml("Couldn't reach Derby Council right now. Try again in a few minutes."));
+                 }
+           }
 
-Now send your house number or name:
-(e.g. 14  or  Rosewood)`));
-  }
+           if (upper === "TOMORROW") {
+                 try {
+                         const collections = await getCollections(user.postcode, user.house);
+                         const tomorrow = new Date();
+                         tomorrow.setDate(tomorrow.getDate() + 1);
+                         const tomorrowText = tomorrow.toLocaleDateString("en-GB", {
+                                   day: "numeric", month: "long", year: "numeric"
+                         }).toLowerCase();
 
-  // ── Onboarding: house number/name ─────────────────────────────────────────
-  if (user.step === "house") {
-    user.house = text.trim();
-    user.step = "confirm";
-    saveUsers();
-    return res.send(twiml(`Got it 👍
+                   const match = collections.find(d => d.date === tomorrowText);
+                         if (!match) return res.send(twiml("No bin collection tomorrow."));
+                         return res.send(twiml(buildReminder(match)));
+                 } catch (e) {
+                         return res.send(twiml("Couldn't reach Derby Council right now. Try again in a few minutes."));
+                 }
+           }
 
-Address: ${user.house}, ${user.postcode}
-
-Reply YES to confirm, or send a different postcode to start again.`));
-  }
-
-  // ── Onboarding: confirm ───────────────────────────────────────────────────
-  if (user.step === "confirm") {
-    if (upper === "YES") {
-      console.log(`[onboarding] Confirmed: ${from} → ${user.house}, ${user.postcode}`);
-      const collections = await getCollections(user.postcode, user.house);
-      user.step = "active";
-      saveUsers();
-
-      if (!collections.length) {
-        return res.send(twiml(`You're set ✅
-
-I'll remind you at 18:00 the night before your bin collection.
-
-Send HELP for commands.`));
-      }
-
-      const next = collections[0];
-      return res.send(twiml(`You're set ✅
-
-Next collection:
-${capitalise(next.date)} – ${capitalise(next.binType)}
-
-You'll get a reminder at 18:00 the night before.
-
-Send HELP for commands.`));
-    }
-
-    // They sent a new postcode — let them re-enter house number too
-    if (UK_POSTCODE.test(text)) {
-      user.postcode = text.toUpperCase().replace(/\s+/g, " ").trim();
-      user.step = "house";
-      saveUsers();
-      return res.send(twiml(`Updated 👍
-
-Postcode: ${user.postcode}
-
-Now send your house number or name:`));
-    }
-
-    return res.send(twiml(`Reply YES to confirm your address (${user.house}, ${user.postcode}), or send a new postcode to correct it.`));
-  }
-
-  return res.send(twiml("Send HELP for available commands."));
+           return res.send(twiml("Send HELP for available commands."));
 });
 
-// ─── Reminder runner ──────────────────────────────────────────────────────────
+// ── Nightly reminder job ─────────────────────────────────────────────────────
 app.get("/run-reminders", async (req, res) => {
-  if (req.query.key !== process.env.RUN_KEY) {
-    return res.status(403).send("Forbidden");
-  }
-
-  const tomorrowText = getTomorrowString();
-  console.log(`[reminders] Running for: ${tomorrowText}`);
-
-  const activeUsers = Object.entries(users).filter(
-    ([, u]) => !u.paused && u.step === "active"
-  );
-
-  console.log(`[reminders] ${activeUsers.length} active user(s) to check`);
-
-  // Cache per postcode+house to avoid duplicate scrapes
-  const cache = {};
-  let sent = 0;
-  let errors = 0;
-
-  for (const [number, user] of activeUsers) {
-    try {
-      const cacheKey = `${user.postcode}|${user.house || ""}`;
-      if (!cache[cacheKey]) {
-        cache[cacheKey] = await getCollections(user.postcode, user.house);
-      }
-
-      const match = cache[cacheKey].find((d) => d.date === tomorrowText);
-
-      if (match) {
-        await client.messages.create({
-          from: process.env.TWILIO_FROM,
-          to: number,
-          body: buildReminder(match)
-        });
-        console.log(`[reminders] Sent to ${number} (${user.house}, ${user.postcode}) – ${match.binType}`);
-        sent++;
-      }
-    } catch (err) {
-      console.error(`[reminders] Failed for ${number}:`, err.message);
-      errors++;
+    if (req.query.key !== process.env.RUN_KEY) {
+          return res.status(403).send("Forbidden");
     }
-  }
 
-  console.log(`[reminders] Done. Sent: ${sent}, Errors: ${errors}`);
-  res.json({ ok: true, sent, errors, checked: activeUsers.length });
+          const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowText = tomorrow.toLocaleDateString("en-GB", {
+          day: "numeric", month: "long", year: "numeric"
+    }).toLowerCase();
+
+          const { rows } = await pool.query(
+                "SELECT * FROM users WHERE step = 'active' AND paused = false"
+              );
+
+          let sent = 0;
+    for (const user of rows) {
+          try {
+                  const collections = await getCollections(user.postcode, user.house);
+                  const match = collections.find(d => d.date === tomorrowText);
+                  if (match) {
+                            await client.messages.create({
+                                        from: process.env.TWILIO_FROM,
+                                        to: user.phone,
+                                        body: buildReminder(match)
+                            });
+                            sent++;
+                  }
+          } catch (e) {
+                  console.error(`[reminders] error for ${user.phone}:`, e.message);
+          }
+    }
+
+          res.json({ ok: true, checked: rows.length, sent });
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
+// ── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`V10 Derby Bin Reminder running on port ${PORT}`);
+setupDb().then(() => {
+    app.listen(PORT, () => console.log(`V11 Binday running on port ${PORT}`));
 });

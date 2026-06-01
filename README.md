@@ -1,4 +1,4 @@
-# Derby Bin Reminder V8
+# Derby Bin Reminder V8 - V11
 
 WhatsApp bot that reminds Derby residents to put their bins out the night before collection day.
 
